@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { ChatMessage, AnimationState } from '@/lib/types';
+import { normalizeAndValidateApiKey } from '@/lib/apiKeys';
 import PhotoUpload from '@/components/PhotoUpload';
 import ChatInterface from '@/components/ChatInterface';
 import ApiKeySetup from '@/components/ApiKeySetup';
@@ -33,7 +34,20 @@ export default function Home() {
   useEffect(() => {
     const tripo = localStorage.getItem('tripo_api_key');
     const anthropic = localStorage.getItem('anthropic_api_key');
-    if (tripo && anthropic) setApiKeys({ tripo, anthropic });
+    if (!tripo || !anthropic) return;
+
+    const normalizedTripo = normalizeAndValidateApiKey(tripo);
+    const normalizedAnthropic = normalizeAndValidateApiKey(anthropic);
+
+    if (normalizedTripo.ok && normalizedAnthropic.ok) {
+      setApiKeys({ tripo: normalizedTripo.value, anthropic: normalizedAnthropic.value });
+      localStorage.setItem('tripo_api_key', normalizedTripo.value);
+      localStorage.setItem('anthropic_api_key', normalizedAnthropic.value);
+      return;
+    }
+
+    localStorage.removeItem('tripo_api_key');
+    localStorage.removeItem('anthropic_api_key');
   }, []);
 
   const handleKeysSaved = (tripoKey: string, anthropicKey: string) => {
@@ -48,15 +62,16 @@ export default function Home() {
     formData.append('image', file);
     formData.append('petName', name);
     try {
+      const formApiKey = normalizeAndValidateApiKey(apiKeys.tripo);
+      if (!formApiKey.ok) throw new Error(`Tripo3D ${formApiKey.error}`);
+      formData.append('apiKey', formApiKey.value);
+
       const res = await fetch('/api/generate-model', {
         method: 'POST',
-        headers: {
-          'x-tripo-api-key': apiKeys.tripo,
-        },
         body: formData,
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok || data.error) throw new Error(data.error || '请求失败');
       setModelUrl(data.modelUrl);
       setStage('interactive');
     } catch (err) {
@@ -70,17 +85,22 @@ export default function Home() {
     setMessages(prev => [...prev, { role: 'user', content: message }]);
     setIsLoading(true);
     try {
+      const chatApiKey = normalizeAndValidateApiKey(apiKeys.anthropic);
+      if (!chatApiKey.ok) throw new Error(`Anthropic ${chatApiKey.error}`);
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-anthropic-api-key': apiKeys.anthropic,
         },
-        body: JSON.stringify({ message, petName }),
+        body: JSON.stringify({ message, petName, apiKey: chatApiKey.value }),
       });
       const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || '请求失败');
       setAnimationState(data.animationState);
       setMessages(prev => [...prev, { role: 'pet', content: data.reply, animationState: data.animationState }]);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '发送消息失败，请重试');
     } finally {
       setIsLoading(false);
     }

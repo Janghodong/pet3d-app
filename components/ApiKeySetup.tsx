@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { normalizeAndValidateApiKey } from '@/lib/apiKeys';
 
 interface ApiKeySetupProps {
   onSave: (tripoKey: string, anthropicKey: string) => void;
@@ -11,13 +12,26 @@ export default function ApiKeySetup({ onSave }: ApiKeySetupProps) {
   const [anthropicKey, setAnthropicKey] = useState('');
   const [showTripo, setShowTripo] = useState(false);
   const [showAnthropic, setShowAnthropic] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tripoKey.trim() || !anthropicKey.trim()) return;
-    localStorage.setItem('tripo_api_key', tripoKey.trim());
-    localStorage.setItem('anthropic_api_key', anthropicKey.trim());
-    onSave(tripoKey.trim(), anthropicKey.trim());
+    const normalizedTripo = normalizeAndValidateApiKey(tripoKey);
+    if (!normalizedTripo.ok) {
+      setError(`Tripo3D ${normalizedTripo.error}`);
+      return;
+    }
+
+    const normalizedAnthropic = normalizeAndValidateApiKey(anthropicKey);
+    if (!normalizedAnthropic.ok) {
+      setError(`Anthropic ${normalizedAnthropic.error}`);
+      return;
+    }
+
+    setError('');
+    localStorage.setItem('tripo_api_key', normalizedTripo.value);
+    localStorage.setItem('anthropic_api_key', normalizedAnthropic.value);
+    onSave(normalizedTripo.value, normalizedAnthropic.value);
   };
 
   return (
@@ -75,6 +89,10 @@ export default function ApiKeySetup({ onSave }: ApiKeySetupProps) {
           >
             开始使用
           </button>
+
+          {error && (
+            <p className="text-sm text-red-500">{error}</p>
+          )}
         </form>
       </div>
     </div>
