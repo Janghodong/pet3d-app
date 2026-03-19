@@ -1,7 +1,103 @@
 const TRIPO_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 
+export function isHttpUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value);
+}
+
+export function looksLikeModelUrl(value: string) {
+  return /\.(glb|gltf)(\?|$)/i.test(value);
+}
+
+export function isModelLikeKey(key: string) {
+  return /(^|_)(pbr_model|model|glb|gltf|model_url|rendered_model|download_url)(_|$)/i.test(key);
+}
+
+export function extractHttpUrl(value: unknown): string | undefined {
+  if (isHttpUrl(value)) {
+    return value;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const entries = Object.entries(value);
+
+  for (const [key, nestedValue] of entries) {
+    if (isModelLikeKey(key) && isHttpUrl(nestedValue)) {
+      return nestedValue;
+    }
+  }
+
+  for (const [, nestedValue] of entries) {
+    if (isHttpUrl(nestedValue)) {
+      return nestedValue;
+    }
+  }
+
+  return undefined;
+}
+
+export function extractModelUrl(taskData: unknown): string | undefined {
+  if (!taskData || typeof taskData !== 'object') return undefined;
+
+  const visited = new Set<unknown>();
+  const queue: unknown[] = [taskData];
+  const modelKeyCandidates: string[] = [];
+  const modelUrlCandidates: string[] = [];
+  const genericUrlCandidates: string[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== 'object' || visited.has(current)) continue;
+    visited.add(current);
+
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+
+    const entries = Object.entries(current);
+
+    for (const [key, value] of entries) {
+      const httpUrl = extractHttpUrl(value);
+      if (!httpUrl) continue;
+
+      if (isModelLikeKey(key)) {
+        if (looksLikeModelUrl(httpUrl)) {
+          return httpUrl;
+        }
+
+        modelKeyCandidates.push(httpUrl);
+        continue;
+      }
+
+      if (looksLikeModelUrl(httpUrl)) {
+        modelUrlCandidates.push(httpUrl);
+        continue;
+      }
+
+      genericUrlCandidates.push(httpUrl);
+    }
+
+    for (const [, value] of entries) {
+      if (value && typeof value === 'object') {
+        queue.push(value);
+      }
+    }
+  }
+
+  return modelKeyCandidates[0] ?? modelUrlCandidates[0] ?? genericUrlCandidates[0];
+}
+
+export function getTripoFileType(mimeType: string): 'png' | 'jpg' | 'webp' {
+  if (mimeType === 'image/png') return 'png';
+  if (mimeType === 'image/webp') return 'webp';
+  return 'jpg';
+}
+
 export async function uploadImage(buffer: Buffer, mimeType: string, apiKey: string): Promise<string> {
-  const fileExtension = mimeType.split('/')[1] as 'png' | 'jpg' | 'webp';
+  const fileExtension = getTripoFileType(mimeType);
   const formData = new FormData();
   const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
   formData.append('file', blob, `upload.${fileExtension}`);
@@ -22,11 +118,15 @@ export async function uploadImage(buffer: Buffer, mimeType: string, apiKey: stri
   return data.data.image_token as string;
 }
 
-export async function createImageToModelTask(fileToken: string, apiKey: string): Promise<string> {
+export async function createImageToModelTask(fileToken: string, mimeType: string, apiKey: string): Promise<string> {
   const response = await fetch(`${TRIPO_BASE_URL}/task`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'image_to_model', file: { type: 'png', file_token: fileToken } }),
+    body: JSON.stringify({
+      type: 'image_to_model',
+      file: { type: getTripoFileType(mimeType), file_token: fileToken },
+      output: { format: 'glb' },
+    }),
   });
 
   if (!response.ok) {
@@ -54,7 +154,10 @@ export async function getTaskStatus(taskId: string, apiKey: string): Promise<{ s
   if (data.code !== 0) throw new Error(`Tripo3D get task error: ${JSON.stringify(data)}`);
 
   const taskData = data.data;
-  return { status: taskData.status as string, modelUrl: taskData.output?.model as string | undefined };
+  return {
+    status: taskData.status as string,
+    modelUrl: extractModelUrl(taskData),
+  };
 }
 
 export async function waitForModel(taskId: string, apiKey: string): Promise<string> {
@@ -66,7 +169,15 @@ export async function waitForModel(taskId: string, apiKey: string): Promise<stri
     const { status, modelUrl } = await getTaskStatus(taskId, apiKey);
 
     if (status === 'success') {
-      if (!modelUrl) throw new Error(`Task ${taskId} succeeded but no model URL returned`);
+      if (!modelUrl) {
+        const response = await fetch(`${TRIPO_BASE_URL}/task/${taskId}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        const data = await response.json();
+        const outputKeys = Object.keys(data?.data?.output ?? {});
+        throw new Error(`Task ${taskId} succeeded but no usable model URL returned. Output keys: ${outputKeys.join(', ') || 'none'}`);
+      }
       return modelUrl;
     }
     if (status === 'failed' || status === 'cancelled') {

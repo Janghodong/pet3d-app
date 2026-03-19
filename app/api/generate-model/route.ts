@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     const mimeType = imageFile.type || 'image/png';
 
     const fileToken = await uploadImage(buffer, mimeType, normalizedApiKey.value);
-    const taskId = await createImageToModelTask(fileToken, normalizedApiKey.value);
+    const taskId = await createImageToModelTask(fileToken, mimeType, normalizedApiKey.value);
     const modelUrl = await waitForModel(taskId, normalizedApiKey.value);
 
     return NextResponse.json({ modelUrl, taskId });
