@@ -18,7 +18,8 @@ interface ModelProps {
 
 function Model({ modelUrl, animationState }: ModelProps) {
   const groupRef = useRef<Group>(null);
-  const { scene, animations } = useGLTF(modelUrl);
+  const proxiedModelUrl = `/api/model?url=${encodeURIComponent(modelUrl)}`;
+  const { scene, animations } = useGLTF(proxiedModelUrl);
   const { actions, names } = useAnimations(animations, groupRef);
 
   useEffect(() => {

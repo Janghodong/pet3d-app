@@ -1,4 +1,5 @@
 const TRIPO_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
+const TRIPO_FETCH_TIMEOUT_MS = 30000;
 
 export function isHttpUrl(value: unknown): value is string {
   return typeof value === 'string' && /^https?:\/\//i.test(value);
@@ -96,13 +97,42 @@ export function getTripoFileType(mimeType: string): 'png' | 'jpg' | 'webp' {
   return 'jpg';
 }
 
+function toErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) {
+    return fallback;
+  }
+
+  const cause = error.cause as { code?: string } | undefined;
+
+  if (cause?.code === 'UND_ERR_CONNECT_TIMEOUT') {
+    return '连接 Tripo3D API 超时，请检查当前网络后重试';
+  }
+
+  if (error.name === 'AbortError') {
+    return '请求 Tripo3D API 超时，请稍后重试';
+  }
+
+  return error.message || fallback;
+}
+
+async function fetchTripo(path: string, init: RequestInit) {
+  try {
+    return await fetch(`${TRIPO_BASE_URL}${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(TRIPO_FETCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new Error(toErrorMessage(error, '请求 Tripo3D API 失败'), { cause: error });
+  }
+}
+
 export async function uploadImage(buffer: Buffer, mimeType: string, apiKey: string): Promise<string> {
   const fileExtension = getTripoFileType(mimeType);
   const formData = new FormData();
   const blob = new Blob([new Uint8Array(buffer)], { type: mimeType });
   formData.append('file', blob, `upload.${fileExtension}`);
 
-  const response = await fetch(`${TRIPO_BASE_URL}/upload`, {
+  const response = await fetchTripo('/upload', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
@@ -119,7 +149,7 @@ export async function uploadImage(buffer: Buffer, mimeType: string, apiKey: stri
 }
 
 export async function createImageToModelTask(fileToken: string, mimeType: string, apiKey: string): Promise<string> {
-  const response = await fetch(`${TRIPO_BASE_URL}/task`, {
+  const response = await fetchTripo('/task', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -140,7 +170,7 @@ export async function createImageToModelTask(fileToken: string, mimeType: string
 }
 
 export async function getTaskStatus(taskId: string, apiKey: string): Promise<{ status: string; modelUrl?: string }> {
-  const response = await fetch(`${TRIPO_BASE_URL}/task/${taskId}`, {
+  const response = await fetchTripo(`/task/${taskId}`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${apiKey}` },
   });
@@ -170,7 +200,7 @@ export async function waitForModel(taskId: string, apiKey: string): Promise<stri
 
     if (status === 'success') {
       if (!modelUrl) {
-        const response = await fetch(`${TRIPO_BASE_URL}/task/${taskId}`, {
+        const response = await fetchTripo(`/task/${taskId}`, {
           method: 'GET',
           headers: { Authorization: `Bearer ${apiKey}` },
         });

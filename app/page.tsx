@@ -22,6 +22,26 @@ const ModelViewer = dynamic(() => import('@/components/ModelViewer'), {
 
 type AppStage = 'upload' | 'generating' | 'interactive';
 
+async function parseApiError(response: Response) {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    const data = await response.json();
+    return data?.error || '请求失败';
+  }
+
+  const text = await response.text();
+  return text || '请求失败';
+}
+
+function toUserFacingError(error: unknown, fallback: string) {
+  if (error instanceof TypeError && /failed to fetch/i.test(error.message)) {
+    return `${fallback}：无法连接本地服务，请确认开发服务器正在运行并刷新页面后重试。`;
+  }
+
+  return error instanceof Error ? error.message : fallback;
+}
+
 export default function Home() {
   const [stage, setStage] = useState<AppStage>('upload');
   const [petName, setPetName] = useState('');
@@ -70,13 +90,16 @@ export default function Home() {
         method: 'POST',
         body: formData,
       });
+      if (!res.ok) {
+        throw new Error(await parseApiError(res));
+      }
       const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || '请求失败');
+      if (data.error) throw new Error(data.error || '请求失败');
       setModelUrl(data.modelUrl);
       setStage('interactive');
     } catch (err) {
       setStage('upload');
-      alert(`生成失败：${err instanceof Error ? err.message : '请重试'}`);
+      alert(`生成失败：${toUserFacingError(err, '请重试')}`);
     }
   };
 
@@ -95,12 +118,15 @@ export default function Home() {
         },
         body: JSON.stringify({ message, petName, apiKey: chatApiKey.value }),
       });
+      if (!res.ok) {
+        throw new Error(await parseApiError(res));
+      }
       const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || '请求失败');
+      if (data.error) throw new Error(data.error || '请求失败');
       setAnimationState(data.animationState);
       setMessages(prev => [...prev, { role: 'pet', content: data.reply, animationState: data.animationState }]);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '发送消息失败，请重试');
+      alert(toUserFacingError(err, '发送消息失败，请重试'));
     } finally {
       setIsLoading(false);
     }
