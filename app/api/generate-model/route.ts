@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { normalizeAndValidateApiKey } from '@/lib/apiKeys';
-import { uploadImage, createImageToModelTask, waitForModel } from '@/lib/tripo';
+import { uploadImage, createImageToModelTask } from '@/lib/tripo';
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,9 +24,8 @@ export async function POST(request: NextRequest) {
 
     const fileToken = await uploadImage(buffer, mimeType, normalizedApiKey.value);
     const taskId = await createImageToModelTask(fileToken, mimeType, normalizedApiKey.value);
-    const modelUrl = await waitForModel(taskId, normalizedApiKey.value);
 
-    return NextResponse.json({ modelUrl, taskId });
+    return NextResponse.json({ taskId, status: 'pending' });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error occurred';
     console.error('Error in generate-model route:', error);

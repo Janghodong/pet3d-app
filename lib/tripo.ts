@@ -1,3 +1,5 @@
+import type { TripoRigType } from './types';
+
 const TRIPO_BASE_URL = 'https://api.tripo3d.ai/v2/openapi';
 const TRIPO_FETCH_TIMEOUT_MS = 30000;
 
@@ -97,6 +99,14 @@ export function getTripoFileType(mimeType: string): 'png' | 'jpg' | 'webp' {
   return 'jpg';
 }
 
+export interface TripoTaskInfo {
+  status: string;
+  modelUrl?: string;
+  riggable?: boolean;
+  rigType?: TripoRigType;
+  taskType?: string;
+}
+
 function toErrorMessage(error: unknown, fallback: string) {
   if (!(error instanceof Error)) {
     return fallback;
@@ -118,6 +128,7 @@ function toErrorMessage(error: unknown, fallback: string) {
 async function fetchTripo(path: string, init: RequestInit) {
   try {
     return await fetch(`${TRIPO_BASE_URL}${path}`, {
+      cache: 'no-store',
       ...init,
       signal: AbortSignal.timeout(TRIPO_FETCH_TIMEOUT_MS),
     });
@@ -169,7 +180,84 @@ export async function createImageToModelTask(fileToken: string, mimeType: string
   return data.data.task_id as string;
 }
 
-export async function getTaskStatus(taskId: string, apiKey: string): Promise<{ status: string; modelUrl?: string }> {
+export async function createRigCheckTask(originalModelTaskId: string, apiKey: string): Promise<string> {
+  const response = await fetchTripo('/task', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'animate_prerigcheck',
+      original_model_task_id: originalModelTaskId,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Tripo3D rig check failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  if (data.code !== 0) throw new Error(`Tripo3D rig check error: ${JSON.stringify(data)}`);
+  return data.data.task_id as string;
+}
+
+export async function createRigTask(
+  originalModelTaskId: string,
+  rigType: TripoRigType,
+  apiKey: string
+): Promise<string> {
+  const response = await fetchTripo('/task', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'animate_rig',
+      original_model_task_id: originalModelTaskId,
+      model_version: 'v2.0-20250506',
+      out_format: 'glb',
+      rig_type: rigType,
+      spec: 'tripo',
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Tripo3D rig model failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  if (data.code !== 0) throw new Error(`Tripo3D rig model error: ${JSON.stringify(data)}`);
+  return data.data.task_id as string;
+}
+
+export async function createRetargetTask(
+  riggedModelTaskId: string,
+  preset: string,
+  apiKey: string
+): Promise<string> {
+  const response = await fetchTripo('/task', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'animate_retarget',
+      original_model_task_id: riggedModelTaskId,
+      animation: preset,
+      out_format: 'glb',
+      bake_animation: true,
+      export_with_geometry: true,
+      animate_in_place: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Tripo3D retarget failed (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  if (data.code !== 0) throw new Error(`Tripo3D retarget error: ${JSON.stringify(data)}`);
+  return data.data.task_id as string;
+}
+
+export async function getTaskStatus(taskId: string, apiKey: string): Promise<TripoTaskInfo> {
   const response = await fetchTripo(`/task/${taskId}`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -187,6 +275,9 @@ export async function getTaskStatus(taskId: string, apiKey: string): Promise<{ s
   return {
     status: taskData.status as string,
     modelUrl: extractModelUrl(taskData),
+    riggable: (taskData.output?.riggable ?? taskData.riggable) as boolean | undefined,
+    rigType: (taskData.output?.rig_type ?? taskData.rig_type) as TripoRigType | undefined,
+    taskType: taskData.type as string | undefined,
   };
 }
 

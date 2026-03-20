@@ -1,10 +1,12 @@
 'use client';
 
-import { Suspense, useEffect, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Environment, useGLTF, useAnimations } from '@react-three/drei';
 import { AnimationState } from '@/lib/types';
-import { Group } from 'three';
+import { findBestAnimationClipName } from '@/lib/animation';
+import { Box3, Group, Vector3 } from 'three';
+import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 interface ModelViewerProps {
   modelUrl: string;
@@ -20,23 +22,29 @@ function Model({ modelUrl, animationState }: ModelProps) {
   const groupRef = useRef<Group>(null);
   const proxiedModelUrl = `/api/model?url=${encodeURIComponent(modelUrl)}`;
   const { scene, animations } = useGLTF(proxiedModelUrl);
+  const clonedScene = useMemo(() => clone(scene), [scene]);
   const { actions, names } = useAnimations(animations, groupRef);
+
+  useLayoutEffect(() => {
+    const bounds = new Box3().setFromObject(clonedScene);
+    if (bounds.isEmpty()) {
+      return;
+    }
+
+    const center = bounds.getCenter(new Vector3());
+    clonedScene.position.set(-center.x, -bounds.min.y, -center.z);
+  }, [clonedScene]);
 
   useEffect(() => {
     if (!actions || names.length === 0) return;
 
-    // Stop all currently playing actions
     Object.values(actions).forEach(action => action?.stop());
 
-    // Try to find the matching animation by name (case-insensitive)
-    const matchingName = names.find(
-      name => name.toLowerCase() === animationState.toLowerCase()
-    );
+    const matchingName = findBestAnimationClipName(names, animationState);
 
     if (matchingName && actions[matchingName]) {
       actions[matchingName]!.reset().fadeIn(0.3).play();
     } else if (names.length > 0) {
-      // Fallback: play the first available animation
       const fallbackName = names[0];
       actions[fallbackName]?.reset().fadeIn(0.3).play();
     }
@@ -46,7 +54,11 @@ function Model({ modelUrl, animationState }: ModelProps) {
     };
   }, [animationState, actions, names]);
 
-  return <primitive ref={groupRef} object={scene} />;
+  return (
+    <group ref={groupRef}>
+      <primitive object={clonedScene} />
+    </group>
+  );
 }
 
 function LoadingSpinner() {
